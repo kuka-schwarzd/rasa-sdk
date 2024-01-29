@@ -54,3 +54,24 @@ def add_endpoint_arguments(parser):
         help="Enable auto-reloading of modules containing Action subclasses.",
         action="store_true",
     )
+    parser.add_argument(
+        "-ef",
+        "--enable-forwarding",
+        default=False,
+        type=bool,
+        help="Enable forwarding non registered actions to another action server",
+    )
+    parser.add_argument(
+        "-fip",
+        "--forward-ip",
+        default="0.0.0.0",
+        type=str,
+        help="IP address of the second action server",
+    )
+    parser.add_argument(
+        "-fp",
+        "--forward-port",
+        default=5056,
+        type=int,
+        help="Port of the second action server",
+    )

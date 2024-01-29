@@ -6,6 +6,7 @@ import zlib
 import json
 from typing import List, Text, Union, Optional
 from ssl import SSLContext
+import requests
 
 from sanic import Sanic, response
 from sanic.response import HTTPResponse
@@ -65,6 +66,9 @@ def create_app(
     action_package_name: Union[Text, types.ModuleType],
     cors_origins: Union[Text, List[Text], None] = "*",
     auto_reload: bool = False,
+    enable_forwarding: bool = False,
+    forward_ip: str = "0.0.0.0",
+    forward_port: int = 5056
 ) -> Sanic:
     """Create a Sanic application and return it.
 
@@ -73,6 +77,9 @@ def create_app(
             from.
         cors_origins: CORS origins to allow.
         auto_reload: When `True`, auto-reloading of actions is enabled.
+        enable_forwarding: Whether to enable forwarding to another action server.
+        forward_ip: IP address of the second action server.
+        forward_port: Port of the second action server.
 
     Returns:
         A new Sanic application ready to be run.
@@ -111,14 +118,29 @@ def create_app(
 
         try:
             result = await executor.run(action_call)
+            # print("Result from executor:", result)  # Print the result
         except ActionExecutionRejection as e:
             logger.debug(e)
             body = {"error": e.message, "action_name": e.action_name}
             return response.json(body, status=400)
         except ActionNotFoundException as e:
-            logger.error(e)
-            body = {"error": e.message, "action_name": e.action_name}
-            return response.json(body, status=404)
+            if enable_forwarding:
+                try:
+                    # Forward the request to another server
+                    forward_url = f"http://{forward_ip}:{forward_port}/webhook"
+                    reply = requests.post(forward_url, json=action_call)
+                    reply.raise_for_status()
+                    result_from_other_server = reply.json()
+                    result = result_from_other_server
+                    # print("Result from other server:", result_from_other_server)  # Print the result
+                except requests.RequestException as ex:
+                    logger.error(f"Forwarding request failed: {ex}")
+                    body = {"error": "Forwarding request failed", "action_name": e.action_name}
+                    return response.json(body, status=504)
+            else:
+                logger.error(e)
+                body = {"error": e.message, "action_name": e.action_name}
+                return response.json(body, status=404)
 
         return response.json(result, status=200)
 
@@ -151,11 +173,15 @@ def run(
     ssl_keyfile: Optional[Text] = None,
     ssl_password: Optional[Text] = None,
     auto_reload: bool = False,
+    enable_forwarding: bool = False,
+    forward_ip: str = "0.0.0.0",
+    forward_port: int = 5056
 ) -> None:
     """Starts the action endpoint server with given config values."""
     logger.info("Starting action endpoint server...")
     app = create_app(
-        action_package_name, cors_origins=cors_origins, auto_reload=auto_reload
+        action_package_name, cors_origins=cors_origins, auto_reload=auto_reload,
+        enable_forwarding=enable_forwarding, forward_ip=forward_ip, forward_port=forward_port
     )
     ## Attach additional sanic extensions: listeners, middleware and routing
     logger.info("Starting plugins...")
@@ -165,6 +191,8 @@ def run(
     host = os.environ.get("SANIC_HOST", "0.0.0.0")
 
     logger.info(f"Action endpoint is up and running on {protocol}://{host}:{port}")
+    if enable_forwarding:
+        logger.info(f"Forwarding to second Action endpoint on {protocol}://{forward_ip}:{forward_port}")
     app.run(host, port, ssl=ssl_context, workers=utils.number_of_sanic_workers())
 
 
